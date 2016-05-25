@@ -1,0 +1,15 @@
+#!/bin/bash
+if [[ $2 == "debug" ]]
+then
+  export RA_DEBUG=1
+fi
+
+SCRIPT_DIR=$(dirname $(readlink -f $0))
+
+export OCF_ROOT=/usr/lib/ocf
+export CRM_MASTER=echo
+export OCF_RESKEY_initiators="test1=50:01:43:80:03:b0:23:34,50:01:43:80:03:b0:23:36;test2=50:01:43:80:03:b0:23:35,50:01:43:80:03:b0:23:37"
+
+/usr/lib/ocf/resource.d/onesty/scst_qla2xtgt $1
+
+

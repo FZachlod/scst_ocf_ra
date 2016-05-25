@@ -1,0 +1,25 @@
+#!/bin/bash
+if [[ $2 == "debug" ]]
+then
+  export RA_DEBUG=1
+fi
+
+SCRIPT_DIR=$(dirname $(readlink -f $0))
+
+export OCF_RESKEY_CRM_meta_notify_available_uname=beta alpha
+export OCF_RESKEY_CRM_meta_notify_type=post
+export OCF_RESKEY_CRM_meta_notify_operation=start
+export OCF_RESKEY_CRM_meta_notify_start_uname=beta
+
+export OCF_ROOT=/usr/lib/ocf
+export CRM_MASTER=echo
+export OCF_RESKEY_groupname="ssd"
+export OCF_RESKEY_device0="handler=vdisk_nullio,virtname=lu0dummy,dummy=1,export0=all:0"
+export OCF_RESKEY_device1="handler=vdisk_blockio,virtname=testssd,filename=/dev/mapper/vg_ssd-lv_sdd_t1,is_ssd=1,export0=all:1"
+export OCF_RESKEY_device2="handler=vdisk_blockio,virtname=testhdd,filename=/dev/mapper/vg_10k-lv_10k_t1,is_ssd=0,export0=all:2"
+export OCF_RESKEY_tgtdriver="qla2x00t"
+export OCF_RESOURCE_instance="p_aluadg_dummy:0"
+
+/usr/lib/ocf/resource.d/onesty/scst_aluadg $1
+
+
