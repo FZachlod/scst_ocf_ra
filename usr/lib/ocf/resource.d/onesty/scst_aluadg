@@ -42,7 +42,6 @@ fi
 : ${master_score=10}
 
 : ${OCF_RESKEY_CRM_meta_interval=0}
-: ${OCF_RESKEY_CRM_meta_globally_unique:="true"}
 
 #######################################################################
 
@@ -535,7 +534,6 @@ l_deactivate_devicegroup() {
   then
     l_set_alua_state ${OCF_RESKEY_groupname} $remotenode unavailable || return $OCF_ERR_GENERIC
   else
- #   l_block_devices || return $OCF_ERR_GENERIC
     l_set_alua_state ${OCF_RESKEY_groupname} ${nodes[$localnodeid]} unavailable || return $OCF_ERR_GENERIC
   fi
   return $OCF_SUCCESS
@@ -962,7 +960,7 @@ aluadg_promote() {
   l_activate_devicegroup || exit $OCF_ERR_GENERIC
 
   $CRM_MASTER -v ${master_score}
-  return $OCF_SUCCESS                                                                                                                                                                                                                                                                                                                                                                                    # only return $
+  return $OCF_SUCCESS
 }
 
 aluadg_demote() {
@@ -1022,9 +1020,6 @@ aluadg_notify() {
 
   type_op="${OCF_RESKEY_CRM_meta_notify_type}-${OCF_RESKEY_CRM_meta_notify_operation}"
   ocf_log debug "Received $type_op notification."
-  echo "=============================" >> /tmp/dg_env_notify
-  echo $type_op >> /tmp/dg_env_notify
-  printenv | grep "OCF_RESKEY_CRM_meta_notify" >> /tmp/dg_env_notify 
 
   case "$type_op" in
     'post-start')
