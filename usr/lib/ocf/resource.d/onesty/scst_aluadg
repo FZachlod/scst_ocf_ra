@@ -129,7 +129,7 @@ l_create_handler() {
     then
       echo "${devices[$device_num,t10devid]}" > $SCST_BASE/devices/$virtname/t10_dev_id || { ocf_log err "cannot set device id for unknown reason"; return $OCF_ERR_GENERIC; }
     fi
-    echo "${nodes[$localnodeid]}" > $SCST_BASE/devices/$virtname/prod_id 2> /dev/null
+    echo "SCST_${OCF_RESKEY_groupname}" > $SCST_BASE/devices/$virtname/prod_id 2> /dev/null
   return $OCF_SUCCESS
 }
 
