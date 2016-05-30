@@ -1,0 +1,15 @@
+#!/bin/bash
+if [[ $2 == "debug" ]]
+then
+  export RA_DEBUG=1
+fi
+
+export OCF_ROOT=/usr/lib/ocf
+export CRM_MASTER=echo
+export OCF_RESKEY_vdname="VD_SSDTEST"
+export OCF_RESKEY_naaid="0x600605b009d7e4901e9941ca95a3702a"
+export OCF_RESOURCE_instance="p_syncro_dummy:0"
+
+/usr/lib/ocf/resource.d/onesty/syncrovd $1
+
+

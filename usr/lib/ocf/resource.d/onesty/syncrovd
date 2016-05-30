@@ -1,0 +1,252 @@
+#!/bin/bash
+if [[ $RA_DEBUG == 1 ]]
+then
+  set -x
+fi
+start=$(date +%s)
+#
+#
+# syncrovd RA. juggles around Avago Syncro CS logical drives between
+# the peer controllers.
+#
+# Copyright (c) 2016 Onesty Tech GmbH, Felix Zachlod
+#                    All Rights Reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of version 2 of the GNU General Public License as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it would be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Further, this software is distributed without any warranty that it is
+# free of the rightful claim of any third person regarding infringement
+# or the like.  Any license provided herein, whether implied or
+# otherwise, applies only to this software file.  Patent licenses, if
+# any, provided herein do not apply to combinations of this program with
+# other software, or any other product whatsoever.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write the Free Software Foundation,
+# Inc., 59 Temple Place - Suite 330, Boston MA 02111-1307, USA.
+#
+
+#######################################################################
+# Initialization:
+
+: ${OCF_FUNCTIONS=${OCF_ROOT}/resource.d/heartbeat/.ocf-shellfuncs}
+. ${OCF_FUNCTIONS}
+: ${__OCF_ACTION=$1}
+
+NAA_REGEX="^[0-9a-z]{16}([0-9a-z]{16}?)$"
+VDNAME_REGEX="^[0-9A-Za-z_-]{1,15}$"
+STORCLI="/usr/sbin/storcli"
+SG_PERSIST="/usr/bin/sg_persist"
+localnodeid=$(${HA_SBIN_DIR}/crm_node -i)
+ocf_log err $localnodeid
+
+#######################################################################
+
+meta_data() {
+	cat <<END
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="syncrovd" version="1.0">
+<version>1.0</version>
+<longdesc lang="en">
+This resource agent can be used to juggle the virtual drives around
+between the Avago Syncro CS HA Raid controllers. Be aware that it uses 
+SCSI persistent reservations and will disrupt write access to the drive for
+one peer for some seconds when started on the other peer. Make sure
+your constraints forbid starting other resources while the RA starts up.
+storcli and sg3_utils have to be installed.
+</longdesc>
+<shortdesc lang="en">syncrovd resource agent</shortdesc>
+<parameters>
+<parameter name="vdname" unique="1" required="1">
+<longdesc lang="en">
+Name of the virtual disk from the controller's perspective (how is it named in storcli / msm)
+</longdesc>
+<shortdesc lang="en">vdname</shortdesc>
+<content type="string" />
+</parameter>
+<parameter name="naaid" unique="1" required="1">
+<longdesc lang="en">
+Scsi NAA id to find the disk in /dev/disk/by-uuid e.g.
+0x600605b009d7e4901e9941ca95a3702a or 600605b009d7e4901e9941ca95a3702a
+This should be shown when examining the disk with storlcli /cX/vX show all either.
+</longdesc>
+<shortdesc lang="en">Naa id of the disk</shortdesc>
+<content type="string" />
+</parameter>
+</parameters>
+<actions>
+<action name="start"        timeout="60" />
+<action name="stop"         timeout="20" />
+<action name="monitor"      timeout="20" />
+<action name="validate-all" timeout="20" />
+<action name="meta-data"    timeout="5" />
+</actions>
+</resource-agent>
+END
+}
+
+#######################################################################
+
+syncrovd_usage() {
+  cat <<END
+usage: $0 {start|stop|monitor|validate-all|meta-data}
+
+Expects to have a fully populated OCF RA-compliant environment set.
+END
+}
+
+l_test_disk_idle() {
+  device=$(readlink /dev/disk/by-id/wwn-0x${OCF_RESKEY_naaid} | egrep -o 'sd[a-z]+$')
+  local readio_in=$(cat /sys/block/sda/stat | awk {'print $1'})
+  local writeio_in=$(cat /sys/block/sda/stat | awk {'print $5'})
+  sleep 2
+  local readio_out=$(cat /sys/block/sda/stat | awk {'print $1'})
+  local writeio_out=$(cat /sys/block/sda/stat | awk {'print $5'})
+  local pending=$(cat /sys/block/sda/stat | awk {'print $9'})
+  if [[ $(($readio-out - $readio-in)) -eq 0 ]] && [[ $(($writeio-out - $writeio-in)) -eq 0 ]] && [[ $pending -eq 0 ]]
+  then
+    return $OCF_SUCCESS
+  fi
+  ocf_log err "disk ${OCF_RESKEY_naaid} not idle"
+  return $OCF_ERR_GENERIC
+}
+
+l_remove_reservation() {
+  runtime=$(($(date +%s)-$start))
+  sleep $((${OCF_RESKEY_CRM_meta_timeout} - $runtime - 5 ))
+  ${SG_PERSIST} --out --release --param-rk=${localnodeid} --prout-type=1 /dev/disk/by-id/wwn-0x${OCF_RESKEY_naaid} &> /dev/null
+}
+
+syncrovd_start() {
+  syncrovd_monitor
+  if [ $? =  $OCF_SUCCESS ]; then
+    return $OCF_SUCCESS
+  fi
+  if [[ ! -z $(${STORCLI} /c0 show | egrep '[0-9]+/[0-9]+[ ]+RAID[0-9]+' | egrep -o '[^ ]+[ ]+$' | egrep $OCF_RESKEY_vdname) ]]
+  then
+    touch ${OCF_RESKEY_state}
+    return $OCF_SUCCESS
+  fi
+  if [[ ! -b /dev/disk/by-id/wwn-0x${OCF_RESKEY_naaid} ]]
+  then
+    ocf_log err "disk ${OCF_RESKEY_naaid} does not exist"
+    return $OCF_ERR_ARGS
+  fi
+  check_binary ${STORCLI}
+  check_binary ${SG_PERSIST}
+  l_test_disk_idle || return $OCF_ERR_GENERIC
+  if [[ -z $(${SG_PERSIST} -k /dev/disk/by-id/wwn-0x${OCF_RESKEY_naaid} | grep follow -A 10 | egrep "0x${localnodeid}\$") ]]
+  then
+    ${SG_PERSIST} --out --register --param-sark=${localnodeid} /dev/disk/by-id/wwn-0x${OCF_RESKEY_naaid} 1> /dev/null
+  fi
+  ${SG_PERSIST} --out --reserve --param-rk=${localnodeid} --prout-type=1 /dev/disk/by-id/wwn-0x${OCF_RESKEY_naaid} &> /dev/null || return $OCF_ERR_GENERIC
+  l_remove_reservation &
+  while true
+  do
+    if [[ ! -z $(${STORCLI} /c0 show | egrep '[0-9]+/[0-9]+[ ]+RAID[0-9]+' | egrep -o '[^ ]+[ ]+$' | egrep $OCF_RESKEY_vdname) ]]
+    then
+      break
+    fi
+    sleep 3
+  done
+  ${SG_PERSIST} --out --release --param-rk=${localnodeid} --prout-type=1 /dev/disk/by-id/wwn-0x${OCF_RESKEY_naaid} &> /dev/null
+  touch ${OCF_RESKEY_state}
+  return $OCF_SUCCESS
+}
+
+syncrovd_stop() {
+  syncrovd_monitor
+  if [ $? =  $OCF_SUCCESS ]; then
+    rm ${OCF_RESKEY_state}
+  fi
+  return $OCF_SUCCESS
+}
+
+syncrovd_monitor() {
+  syncrovd_validate
+  if [ -f ${OCF_RESKEY_state} ]; then
+    return $OCF_SUCCESS
+  fi
+  if false ; then
+    return $OCF_ERR_GENERIC
+  fi
+  return $OCF_NOT_RUNNING
+}
+
+syncrovd_validate() {
+  state_dir=$(dirname "$OCF_RESKEY_state")
+  touch "$state_dir/$$"
+  if [ $? != 0 ]; then
+    ocf_log err "state dir is not writable"
+    return $OCF_ERR_ARGS
+  fi
+  rm "$state_dir/$$"
+
+  ocf_log err $OCF_RESKEY_vdname
+  if [[ ! $OCF_RESKEY_vdname =~ $VDNAME_REGEX ]]
+  then
+    ocf_log err "virtual disk name format wrong"
+    return $OCF_ERR_ARGS
+  fi
+
+  OCF_RESKEY_naaid=$(echo $OCF_RESKEY_naaid | tr '[:upper:]' '[:lower:]' | sed 's/0x*//')
+  if [[ ! $OCF_RESKEY_naaid =~ $NAA_REGEX ]]
+  then
+    ocf_log err "naaid name format wrong"
+    return $OCF_ERR_ARGS
+  fi
+
+  return $OCF_SUCCESS
+}
+
+: ${OCF_RESKEY_CRM_meta_interval=0}
+: ${OCF_RESKEY_CRM_meta_timeout=60}
+: ${OCF_RESKEY_CRM_meta_globally_unique:="true"}
+
+if [[ -z "$OCF_RESKEY_state" ]]
+then
+  if [ ${OCF_RESKEY_CRM_meta_globally_unique} = "false" ]
+  then
+    state="${HA_VARRUN}/syncrovd-${OCF_RESOURCE_INSTANCE}.state"
+    OCF_RESKEY_state=$(echo $state | sed s/:[0-9][0-9]*\.state/.state/)
+  else
+    OCF_RESKEY_state="${HA_VARRUN}/syncrovd-${OCF_RESOURCE_INSTANCE}.state"
+  fi
+fi
+
+case $__OCF_ACTION in
+  meta-data)
+    meta_data
+    exit $OCF_SUCCESS
+    ;;
+  start)
+    syncrovd_start
+    ;;
+  stop)
+    syncrovd_stop
+    ;;
+  monitor)
+    syncrovd_monitor
+    ;;
+  validate-all)
+    syncrovd_validate
+    ;;
+  usage|help)
+    syncrovd_usage
+    exit $OCF_SUCCESS
+    ;;
+  *)
+    syncrovd_usage
+    exit $OCF_ERR_UNIMPLEMENTED
+    ;;
+esac
+rc=$?
+ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION : $rc"
+exit $rc
