@@ -72,28 +72,6 @@ c_expand_nodes() {
   return $OCF_SUCCESS
 }
 
-#c_test_node_count() {
-#  local targetnodes=0
-#  for nodeid in ${!nodes[@]}
-#  do
-#    if [[ ! -z ${targetports[$nodeid]} ]]
-#    then
-#      if [[ $nodeid != $localnodeid ]]
-#      then
-#        remotenodeid=$nodeid
-#      fi
-#      let "targetnodes++"
-#    fi
-#  done
-
-# if [[ $targetnodes != 2 ]]
-#  then
-#    ocf_log err "exactly two nodes with target ports expected."
-#    return $OCF_ERR_CONFIGURED
-#  fi
-#  return $OCF_SUCCESS
-#}
-
 c_test_local_ports() {
   if [[ ! -z ${targetports[$localnodeid]} ]]
   then
@@ -122,7 +100,7 @@ c_test_instances() {
 c_issue_lip() {
   for port in ${targetports[$localnodeid]}
   do
-    if [[ $(cat $SCST_BASE/targets/$OCF_RESKEY_tgtdriver/$port/enabled) == "1" ]]
+    if [[ $(cat $SCST_BASE/targets/$OCF_RESKEY_tgtdriver/$port/enabled) == "1" ]] && [[ $OCF_RESKEY_tgtdriver == "qla2x00t" ]]
     then
       ocf_log debug "issuing lip to target port $port"
       echo 1 > $(readlink -f $SCST_BASE/targets/$OCF_RESKEY_tgtdriver/$port/host | sed 's/scsi_host/fc_host/g')/issue_lip & 2> /dev/null
